@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Cinema</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #09090b;
+      color: #f4f4f5;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow-x: hidden;
+    }
+
+    .card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      padding: 24px;
+      width: 90vw;
+      max-width: 420px;
+      text-align: center;
+    }
+    h1 { color: #d4af37; font-size: 1.5rem; margin-bottom: 8px; }
+    p { color: #a1a1aa; font-size: 0.85rem; margin-bottom: 20px; }
+    button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-bottom: 10px;
+      transition: opacity 0.2s;
+    }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    .btn-gold { background: #d4af37; color: #000; }
+    .btn-zinc { background: #27272a; color: #fff; border: 1px solid #3f3f46; }
+    .btn-red { background: #7a0c16; color: #fff; }
+    
+    .text-input {
+      width: 100%;
+      padding: 12px;
+      background: #09090b;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 1rem;
+      margin-bottom: 12px;
+    }
+
+    .bar-bg { width: 100%; height: 8px; background: #27272a; border-radius: 4px; overflow: hidden; margin-top: 12px; }
+    .bar-fill { width: 0%; height: 100%; background: #d4af37; transition: width 0.1s; }
+
+    .remote-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    .remote-grid button { margin-bottom: 0; padding: 12px; font-size: 0.9rem; }
+
+    /* Theater View (Phone B) */
+    #view-screen {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: #050505;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+    #ambient-glow {
+      position: absolute;
+      width: 82vw;
+      height: 50vw;
+      max-height: 70vh;
+      border-radius: 40px;
+      filter: blur(65px);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 1;
+      transition: background 0.3s ease;
+    }
+    .stage {
+      position: relative;
+      width: 92vw;
+      max-width: 960px;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 10px;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.95), 0 0 0 5px #18181b;
+      overflow: hidden;
+      z-index: 2;
+    }
+    video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
+    .curtain {
+      position: absolute;
+      top: 0; bottom: 0; width: 50.5%;
+      background: repeating-linear-gradient(90deg, #7a0c16 0px, #3b0006 18px, #7a0c16 36px);
+      box-shadow: inset 0 0 40px rgba(0,0,0,0.85);
+      z-index: 10;
+      transition: transform 2.4s cubic-bezier(0.65, 0, 0.35, 1);
+    }
+    .curtain.left { left: 0; transform-origin: left center; }
+    .curtain.right { right: 0; transform-origin: right center; }
+    .stage.open .curtain.left { transform: scaleX(0.06) translateX(-50%); }
+    .stage.open .curtain.right { transform: scaleX(0.06) translateX(50%); }
+    .seats {
+      position: absolute;
+      bottom: 0; left: 0; right: 0; height: 44px;
+      background: repeating-linear-gradient(90deg, #121212 0px, #121212 28px, transparent 28px, transparent 34px);
+      border-top-left-radius: 12px;
+      border-top-right-radius: 12px;
+      z-index: 3;
+      pointer-events: none;
+      opacity: 0.6;
+    }
+    #pairing-box {
+      position: absolute;
+      z-index: 20;
+      background: rgba(12, 12, 14, 0.94);
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+    }
+    .code-display { font-size: 3.2rem; letter-spacing: 8px; color: #d4af37; font-weight: 800; margin: 10px 0; }
+  </style>
+</head>
+<body>
+
+  <!-- STEP 1: MODE SELECT -->
+  <div id="view-select" class="card">
+    <h1>Pocket Cinema</h1>
+    <p>Choose device mode:</p>
+    <button class="btn-zinc" onclick="selectRole('screen')">📺 Make this Phone the Theater Screen</button>
+    <button class="btn-gold" onclick="selectRole('host')">🎮 I am the Master Remote</button>
+  </div>
+
+  <!-- STEP 2: MASTER CONTROLLER (PHONE A) -->
+  <div id="view-host" class="card" style="display:none; text-align: left;">
+    <h1 style="text-align:center;">Director Remote</h1>
+    <p style="text-align:center;">Select your video file and control the screen.</p>
+    
+    <label style="font-size:0.85rem; color:#d4af37;">1. Pick Video File from Storage:</label>
+    <input type="file" id="file-picker" accept="video/mp4,video/webm" class="text-input" style="margin-top:6px;">
+
+    <label style="font-size:0.85rem; color:#d4af37;">2. Screen Code (from Screen Phone):</label>
+    <input type="text" id="target-code" placeholder="e.g. 5821" maxlength="4" inputmode="numeric" class="text-input" style="margin-top:6px;">
+    
+    <button id="send-btn" class="btn-gold" onclick="startHostStream()" disabled>Stream Movie to Screen</button>
+    
+    <div class="bar-bg"><div id="progress" class="bar-fill"></div></div>
+    <div style="font-size:0.75rem; color:#a1a1aa; margin-top:6px; display:flex; justify-content:space-between;">
+      <span id="transferred">0 MB</span>
+      <span id="percentage">0%</span>
+    </div>
+
+    <!-- Director Playback Deck -->
+    <div id="remote-deck" style="display: none; margin-top: 20px; border-top: 1px solid #27272a; padding-top: 15px;">
+      <h2 style="font-size: 1rem; color: #d4af37; text-align: center; margin-bottom: 10px;">Screen Control</h2>
+      <div class="remote-grid">
+        <button class="btn-zinc" onclick="sendCmd('rewind')">⏪ -10s</button>
+        <button class="btn-zinc" onclick="sendCmd('forward')">⏩ +10s</button>
+        <button class="btn-gold" id="toggle-play-btn" onclick="sendCmd('toggle')">⏸ Pause Screen</button>
+        <button class="btn-zinc" onclick="sendCmd('unmute')">🔊 Unmute Audio</button>
+      </div>
+      <button class="btn-red" style="margin-top: 10px;" onclick="sendCmd('curtains')">🎭 Open / Close Curtains</button>
+    </div>
+  </div>
+
+  <!-- STEP 3: THEATER SCREEN (PHONE B) -->
+  <div id="view-screen">
+    <div id="ambient-glow"></div>
+    <div class="stage" id="cinema-stage">
+      <div class="curtain left"></div>
+      <div class="curtain right"></div>
+      <video id="theater-screen" playsinline></video>
+    </div>
+    <div class="seats"></div>
+    <div id="pairing-box">
+      <p style="color: #a1a1aa; font-size: 0.95rem;">Awaiting Command from Director...</p>
+      <div class="code-display" id="display-code">----</div>
+      <p id="status-label" style="color: #71717a; font-size: 0.8rem;">Enter this code on your Remote Phone</p>
+    </div>
+  </div>
+
+  <script>
+    let peer = null;
+    let selectedFile = null;
+    let conn = null;
+    let isPaused = false;
+    const CHUNK_SIZE = 64 * 1024; // 64 KB slices keep RAM close to 0 MB
+
+    function selectRole(role) {
+      document.getElementById('view-select').style.display = 'none';
+
+      if (role === 'host') {
+        document.getElementById('view-host').style.display = 'block';
+        initHost();
+      } else {
+        document.getElementById('view-screen').style.display = 'flex';
+        initScreen();
+      }
+    }
+
+    /* HOST SCRIPT */
+    function initHost() {
+      peer = new Peer();
+      const picker = document.getElementById('file-picker');
+      const sendBtn = document.getElementById('send-btn');
+
+      picker.addEventListener('change', (e) => {
+        selectedFile = e.target.files[0];
+        if (selectedFile) sendBtn.disabled = false;
+      });
+    }
+
+    function startHostStream() {
+      const code = document.getElementById('target-code').value.trim();
+      if (code.length !== 4) return alert("Enter the 4-digit code shown on the screen");
+
+      const sendBtn = document.getElementById('send-btn');
+      sendBtn.disabled = true;
+      sendBtn.textContent = "Connecting to Theater Screen...";
+
+      conn = peer.connect('cinehall-' + code, { reliable: true });
+
+      conn.on('open', () => {
+        sendBtn.textContent = "Streaming Video Data...";
+        document.getElementById('remote-deck').style.display = 'block';
+
+        conn.send({
+          type: 'header',
+          name: selectedFile.name,
+          size: selectedFile.size,
+          mime: selectedFile.type || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'
+        });
+
+        transmitChunk(0);
+      });
+    }
+
+    function transmitChunk(offset) {
+      if (offset >= selectedFile.size) {
+        conn.send({ type: 'eof' });
+        document.getElementById('send-btn').textContent = "Movie Fully Loaded on Screen!";
+        return;
+      }
+      if (conn.dataChannel.bufferedAmount > 4 * 1024 * 1024) {
+        return setTimeout(() => transmitChunk(offset), 40);
+      }
+
+      const slice = selectedFile.slice(offset, offset + CHUNK_SIZE);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        conn.send(e.target.result);
+        const next = offset + CHUNK_SIZE;
+        const pct = Math.min(100, Math.round((next / selectedFile.size) * 100));
+        document.getElementById('progress').style.width = pct + '%';
+        document.getElementById('percentage').textContent = pct + '%';
+        document.getElementById('transferred').textContent = `${(Math.min(next, selectedFile.size)/(1024*1024)).toFixed(1)} MB`;
+        setTimeout(() => transmitChunk(next), 0);
+      };
+      reader.readAsArrayBuffer(slice);
+    }
+
+    function sendCmd(action) {
+      if (!conn || !conn.open) return;
+      if (action === 'toggle') {
+        isPaused = !isPaused;
+        document.getElementById('toggle-play-btn').textContent = isPaused ? "▶ Resume Screen" : "⏸ Pause Screen";
+      }
+      conn.send({ type: 'control', action: action });
+    }
+
+    /* SCREEN SCRIPT */
+    function initScreen() {
+      const code = Math.floor(1000 + Math.random() * 9000).toString();
+      document.getElementById('display-code').textContent = code;
+
+      peer = new Peer('cinehall-' + code);
+      const screen = document.getElementById('theater-screen');
+      const stage = document.getElementById('cinema-stage');
+      let mediaSource, sourceBuffer, chunkQueue = [], isStarted = false;
+      let mime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+
+      peer.on('connection', (c) => {
+        document.getElementById('status-label').textContent = "Director connected. Preparing theater...";
+
+        c.on('data', (data) => {
+          if (data.type === 'control') {
+            if (data.action === 'toggle') {
+              screen.paused ? screen.play() : screen.pause();
+            } else if (data.action === 'rewind') {
+              screen.currentTime = Math.max(0, screen.currentTime - 10);
+            } else if (data.action === 'forward') {
+              screen.currentTime = Math.min(screen.duration || 9999, screen.currentTime + 10);
+            } else if (data.action === 'unmute') {
+              screen.muted = false;
+              screen.volume = 1.0;
+            } else if (data.action === 'curtains') {
+              stage.classList.toggle('open');
+            }
+            return;
+          }
+
+          if (data.type === 'header') {
+            if (data.mime && MediaSource.isTypeSupported(data.mime)) mime = data.mime;
+            mediaSource = new MediaSource();
+            screen.src = URL.createObjectURL(mediaSource);
+            mediaSource.addEventListener('sourceopen', () => {
+              try {
+                sourceBuffer = mediaSource.addSourceBuffer(mime);
+                sourceBuffer.mode = 'sequence';
+                sourceBuffer.addEventListener('updateend', () => {
+                  if (chunkQueue.length > 0 && !sourceBuffer.updating) {
+                    sourceBuffer.appendBuffer(chunkQueue.shift());
+                  }
+                });
+              } catch(e) {}
+            });
+            document.getElementById('pairing-box').style.display = 'none';
+            return;
+          }
+
+          if (data.type === 'eof') {
+            try { mediaSource.endOfStream(); } catch(e){}
+            return;
+          }
+
+          if (data instanceof ArrayBuffer) {
+            if (sourceBuffer && !sourceBuffer.updating && chunkQueue.length === 0) {
+              try {
+                sourceBuffer.appendBuffer(data);
+                if (!isStarted && screen.buffered.length > 0 && screen.buffered.end(0) > 1.2) {
+                  isStarted = true;
+                  screen.muted = true;
+                  screen.play();
+                  stage.classList.add('open');
+                  setupAmbientGlow(screen);
+                }
+              } catch(e) { chunkQueue.push(data); }
+            } else {
+              chunkQueue.push(data);
+            }
+          }
+        });
+      });
+    }
+
+    function setupAmbientGlow(videoEl) {
+      const glow = document.getElementById('ambient-glow');
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      canvas.width = 16; canvas.height = 9;
+
+      setInterval(() => {
+        if (!videoEl.paused && !videoEl.ended) {
+          ctx.drawImage(videoEl, 0, 0, 16, 9);
+          const d = ctx.getImageData(0, 0, 16, 9).data;
+          let r = 0, g = 0, b = 0;
+          for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+          glow.style.background = `rgb(${Math.round(r/36)}, ${Math.round(g/36)}, ${Math.round(b/36)})`;
+        }
+      }, 300);
+    }
+  </script>
+</body>
+  </html>
+  
