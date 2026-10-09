@@ -29,8 +29,6 @@
       pointer-events: none;
       transition: background 0.3s;
     }
-
-    /* Stage Container (can enter native fullscreen) */
     .stage {
       position: relative;
       width: 94vw;
@@ -41,21 +39,18 @@
       overflow: hidden;
       box-shadow: 0 20px 50px rgba(0,0,0,0.9);
     }
-    /* When Fullscreen, stretch edge-to-edge like YouTube */
     .stage:fullscreen, .stage:-webkit-full-screen {
       width: 100vw !important;
       height: 100vh !important;
       max-width: none !important;
       border-radius: 0 !important;
     }
-
     video {
       width: 100%;
       height: 100%;
       object-fit: contain;
-      image-rendering: -webkit-optimize-contrast; /* Sharpen decoded frames */
+      image-rendering: -webkit-optimize-contrast;
     }
-
     .curtain {
       position: absolute;
       top: 0; bottom: 0; width: 50.5%;
@@ -68,7 +63,6 @@
     .stage.open .curtain.left { transform: scaleX(0.05) translateX(-50%); }
     .stage.open .curtain.right { transform: scaleX(0.05) translateX(50%); }
 
-    /* Code Pairing Box */
     #box {
       position: absolute;
       z-index: 10;
@@ -79,38 +73,6 @@
       text-align: center;
     }
     #code { font-size: 3.5rem; letter-spacing: 6px; color: #d4af37; font-weight: bold; margin: 10px 0; }
-
-    /* YouTube-style Fullscreen Button in corner */
-    #fs-btn {
-      display: none;
-      position: absolute;
-      bottom: 12px;
-      right: 12px;
-      z-index: 25;
-      background: rgba(0,0,0,0.65);
-      color: #fff;
-      border: 1px solid #444;
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 0.9rem;
-      cursor: pointer;
-      backdrop-filter: blur(4px);
-    }
-
-    /* Tap for Audio prompt */
-    #tap-to-unmute {
-      display: none;
-      position: absolute;
-      z-index: 20;
-      background: #d4af37;
-      color: #000;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-weight: bold;
-      border: none;
-      font-size: 1rem;
-      cursor: pointer;
-    }
   </style>
 </head>
 <body>
@@ -120,11 +82,7 @@
     <div class="curtain left"></div>
     <div class="curtain right"></div>
     <video id="screen" autoplay playsinline muted></video>
-    <!-- On-screen YouTube style fullscreen button -->
-    <button id="fs-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
   </div>
-
-  <button id="tap-to-unmute" onclick="enableAudio()">Tap for Theater Audio 🔊</button>
 
   <div id="box">
     <p style="color:#aaa;">Screen Code:</p>
@@ -139,14 +97,43 @@
     const peer = new Peer('cinehall-' + code);
     const screen = document.getElementById('screen');
     const stage = document.getElementById('stage');
-    const unmuteBtn = document.getElementById('tap-to-unmute');
-    const fsBtn = document.getElementById('fs-btn');
+    let audioCtx = null;
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+      } catch (err) {}
+    }
+
+    // Zero-touch Audio Context routing
+    function routeAudioThroughWebAudio(stream) {
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass();
+        const audioTracks = stream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          const audioStream = new MediaStream([audioTracks[0]]);
+          const source = audioCtx.createMediaStreamSource(audioStream);
+          source.connect(audioCtx.destination);
+          if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+          }
+        }
+      } catch (e) {
+        screen.muted = false;
+        screen.volume = 1.0;
+      }
+    }
 
     peer.on('connection', (conn) => {
       conn.on('data', (data) => {
         if (data.type === 'control') {
           if (data.action === 'curtains') stage.classList.toggle('open');
-          if (data.action === 'fullscreen') toggleFullscreen();
+          if (data.action === 'fullscreen') {
+            if (stage.requestFullscreen) stage.requestFullscreen();
+            else if (stage.webkitRequestFullscreen) stage.webkitRequestFullscreen();
+          }
         }
       });
     });
@@ -160,40 +147,13 @@
         screen.srcObject = remoteStream;
         screen.play().then(() => {
           stage.classList.add('open');
-          unmuteBtn.style.display = 'block';
-          fsBtn.style.display = 'block';
           setupGlow(screen);
+          requestWakeLock();
         });
+
+        routeAudioThroughWebAudio(remoteStream);
       });
     });
-
-    function enableAudio() {
-      screen.muted = false;
-      screen.volume = 1.0;
-      unmuteBtn.style.display = 'none';
-    }
-
-    // Native Mobile Fullscreen (Locks into landscape mode)
-    function toggleFullscreen() {
-      const el = stage;
-      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-        if (el.requestFullscreen) {
-          el.requestFullscreen();
-        } else if (el.webkitRequestFullscreen) {
-          el.webkitRequestFullscreen();
-        }
-        // Rotate screen to horizontal landscape if device supports it
-        if (screen.orientation && screen.orientation.lock) {
-          screen.orientation.lock('landscape').catch(() => {});
-        }
-      } else {
-        if (document.exitFullscreen) {
-          document.exitFullscreen();
-        } else if (document.webkitExitFullscreen) {
-          document.webkitExitFullscreen();
-        }
-      }
-    }
 
     function setupGlow(videoEl) {
       const glow = document.getElementById('glow');
