@@ -17,6 +17,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      position: relative;
     }
     #glow {
       position: absolute;
@@ -43,13 +44,14 @@
       position: absolute;
       top: 0; bottom: 0; width: 50.5%;
       background: repeating-linear-gradient(90deg, #7a0c16 0px, #3b0006 18px, #7a0c16 36px);
-      transition: transform 2.2s ease-in-out;
+      transition: transform 2.2s cubic-bezier(0.65, 0, 0.35, 1);
       z-index: 5;
     }
     .curtain.left { left: 0; transform-origin: left center; }
     .curtain.right { right: 0; transform-origin: right center; }
     .stage.open .curtain.left { transform: scaleX(0.05) translateX(-50%); }
     .stage.open .curtain.right { transform: scaleX(0.05) translateX(50%); }
+    
     #box {
       position: absolute;
       z-index: 10;
@@ -60,20 +62,38 @@
       text-align: center;
     }
     #code { font-size: 3.5rem; letter-spacing: 6px; color: #d4af37; font-weight: bold; margin: 10px 0; }
+    
+    /* Tap overlay to unlock audio safely on mobile browsers */
+    #tap-to-unmute {
+      display: none;
+      position: absolute;
+      z-index: 20;
+      background: #d4af37;
+      color: #000;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: bold;
+      border: none;
+      font-size: 1rem;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
   <div id="glow"></div>
+
   <div class="stage" id="stage">
     <div class="curtain left"></div>
     <div class="curtain right"></div>
-    <video id="screen" playsinline></video>
+    <video id="screen" autoplay playsinline muted></video>
   </div>
+
+  <button id="tap-to-unmute" onclick="enableAudio()">Tap for Theater Audio 🔊</button>
 
   <div id="box">
     <p style="color:#aaa;">Screen Code:</p>
     <div id="code">----</div>
-    <p style="color:#666; font-size:0.8rem;">Waiting for host...</p>
+    <p style="color:#666; font-size:0.8rem;">Waiting for Director...</p>
   </div>
 
   <script>
@@ -83,51 +103,55 @@
     const peer = new Peer('cinehall-' + code);
     const screen = document.getElementById('screen');
     const stage = document.getElementById('stage');
-    let mediaSource, sourceBuffer, queue = [], started = false;
+    const unmuteBtn = document.getElementById('tap-to-unmute');
 
+    // 1. Receive data commands (Curtains)
     peer.on('connection', (conn) => {
       conn.on('data', (data) => {
-        if (data.type === 'control') {
-          if (data.action === 'toggle') screen.paused ? screen.play() : screen.pause();
-          if (data.action === 'rewind') screen.currentTime -= 10;
-          if (data.action === 'forward') screen.currentTime += 10;
-          if (data.action === 'unmute') { screen.muted = false; screen.volume = 1.0; }
-          return;
-        }
-
-        if (data.type === 'header') {
-          mediaSource = new MediaSource();
-          screen.src = URL.createObjectURL(mediaSource);
-          mediaSource.addEventListener('sourceopen', () => {
-            try {
-              sourceBuffer = mediaSource.addSourceBuffer(data.mime || 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
-              sourceBuffer.mode = 'sequence';
-              sourceBuffer.addEventListener('updateend', () => {
-                if (queue.length > 0 && !sourceBuffer.updating) sourceBuffer.appendBuffer(queue.shift());
-              });
-            } catch(e){}
-          });
-          document.getElementById('box').style.display = 'none';
-          return;
-        }
-
-        if (data instanceof ArrayBuffer) {
-          if (sourceBuffer && !sourceBuffer.updating && queue.length === 0) {
-            try {
-              sourceBuffer.appendBuffer(data);
-              if (!started && screen.buffered.length > 0 && screen.buffered.end(0) > 1.2) {
-                started = true;
-                screen.muted = true;
-                screen.play();
-                stage.classList.add('open');
-              }
-            } catch(e) { queue.push(data); }
-          } else {
-            queue.push(data);
-          }
+        if (data.type === 'control' && data.action === 'curtains') {
+          stage.classList.toggle('open');
         }
       });
     });
+
+    // 2. Receive live incoming media stream
+    peer.on('call', (call) => {
+      call.answer();
+
+      call.on('stream', (remoteStream) => {
+        document.getElementById('box').style.display = 'none';
+
+        screen.srcObject = remoteStream;
+        screen.play().then(() => {
+          stage.classList.add('open');
+          unmuteBtn.style.display = 'block';
+          setupGlow(screen);
+        });
+      });
+    });
+
+    function enableAudio() {
+      screen.muted = false;
+      screen.volume = 1.0;
+      unmuteBtn.style.display = 'none';
+    }
+
+    function setupGlow(videoEl) {
+      const glow = document.getElementById('glow');
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      canvas.width = 16; canvas.height = 9;
+
+      setInterval(() => {
+        if (!videoEl.paused && !videoEl.ended) {
+          ctx.drawImage(videoEl, 0, 0, 16, 9);
+          const d = ctx.getImageData(0, 0, 16, 9).data;
+          let r = 0, g = 0, b = 0;
+          for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+          glow.style.background = `rgb(${Math.round(r/36)}, ${Math.round(g/36)}, ${Math.round(b/36)})`;
+        }
+      }, 300);
+    }
   </script>
 </body>
 </html>
