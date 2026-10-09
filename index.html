@@ -49,7 +49,7 @@
     }
     button:disabled { opacity: 0.3; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 15px; }
-    .grid button { background: #27272a; color: #fff; font-size: 0.9rem; padding: 10px; }
+    .grid button { background: #27272a; color: #fff; font-size: 0.9rem; padding: 12px; }
   </style>
 </head>
 <body>
@@ -70,12 +70,13 @@
         <button onclick="seek(-10)">⏪ -10s</button>
         <button onclick="seek(10)">⏩ +10s</button>
         <button id="toggleBtn" onclick="togglePlay()">⏸ Pause</button>
-        <button onclick="sendCmd('curtains')" style="background:#7a0c16; color:#fff;">🎭 Curtains</button>
+        <button onclick="sendCmd('fullscreen')" style="background:#2563eb; color:#fff;">⛶ Fullscreen</button>
+        <button onclick="sendCmd('curtains')" style="background:#7a0c16; color:#fff; grid-column: span 2;">🎭 Curtains</button>
       </div>
     </div>
   </div>
 
-  <!-- Hidden background player: feeds WebRTC pipeline with zero host audio -->
+  <!-- Hidden background video player feeding WebRTC -->
   <video id="engine" playsinline muted style="display:none;"></video>
 
   <script>
@@ -100,27 +101,45 @@
       sendBtn.disabled = true;
       status.textContent = "Connecting...";
 
-      // Connect control channel
       dataConn = peer.connect('cinehall-' + code);
 
       engine.play().then(() => {
-        // Capture live decoded track straight from hardware pipeline
+        // Request smooth 30 FPS stream capture
         const stream = engine.captureStream ? engine.captureStream(30) : engine.mozCaptureStream(30);
-
-        // Call the screen phone with media stream
         const call = peer.call('cinehall-' + code, stream);
 
-        call.on('open', () => {
-          status.textContent = "Streaming live to screen!";
-          document.getElementById('deck').style.display = 'block';
+        // Boost bitrate to 10 Mbps (eliminates pixelation and blur)
+        call.peerConnection.addEventListener('iceconnectionstatechange', () => {
+          if (call.peerConnection.iceConnectionState === 'connected') {
+            boostBitrate(call.peerConnection);
+          }
         });
 
-        status.textContent = "Streaming live to screen!";
+        status.textContent = "HD Cinema Broadcasting!";
         document.getElementById('deck').style.display = 'block';
       }).catch(err => {
         alert("Playback error: " + err);
         sendBtn.disabled = false;
       });
+    }
+
+    // Forces WebRTC to allocate HD bitrate instead of low video-call quality
+    async function boostBitrate(pc) {
+      const senders = pc.getSenders();
+      const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        try {
+          const params = videoSender.getParameters();
+          if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}];
+          }
+          params.encodings[0].maxBitrate = 10000000; // 10 Mbps (Crystal Clear 1080p)
+          params.encodings[0].networkPriority = 'high';
+          await videoSender.setParameters(params);
+        } catch (e) {
+          console.warn("Bitrate boost warning:", e);
+        }
+      }
     }
 
     function togglePlay() {
