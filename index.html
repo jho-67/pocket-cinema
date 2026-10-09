@@ -3,165 +3,133 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Director Remote</title>
+  <title>AirStream - Turbo Sender</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      background: #09090b;
-      color: #fff;
-      font-family: sans-serif;
-      padding: 20px;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
+      background: #09090b; color: #fff; font-family: sans-serif;
+      padding: 24px 16px; display: flex; justify-content: center; align-items: center; min-height: 100vh;
     }
-    .card {
-      background: #18181b;
-      border: 1px solid #27272a;
-      border-radius: 12px;
-      padding: 20px;
-      width: 100%;
-      max-width: 400px;
-    }
+    .card { background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 20px; width: 100%; max-width: 400px; }
     h1 { color: #d4af37; font-size: 1.3rem; margin-bottom: 12px; text-align: center; }
-    input {
-      width: 100%;
-      padding: 12px;
-      background: #000;
-      border: 1px solid #3f3f46;
-      border-radius: 8px;
-      color: #fff;
-      font-size: 1rem;
-      margin-bottom: 12px;
-    }
-    button {
-      width: 100%;
-      padding: 14px;
-      border: none;
-      border-radius: 8px;
-      background: #d4af37;
-      color: #000;
-      font-weight: bold;
-      font-size: 1rem;
-      cursor: pointer;
-    }
+    input { width: 100%; padding: 12px; background: #000; border: 1px solid #3f3f46; border-radius: 8px; color: #fff; font-size: 1rem; margin-bottom: 12px; }
+    button { width: 100%; padding: 14px; border: none; border-radius: 8px; background: #d4af37; color: #000; font-weight: bold; font-size: 1rem; cursor: pointer; }
     button:disabled { opacity: 0.3; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 15px; }
-    .grid button { background: #27272a; color: #fff; font-size: 0.9rem; padding: 12px; }
+    .bar-bg { width: 100%; height: 8px; background: #27272a; border-radius: 4px; overflow: hidden; margin-top: 14px; }
+    .bar-fill { width: 0%; height: 100%; background: #d4af37; transition: width 0.1s; }
+    .stats { font-size: 0.8rem; color: #a1a1aa; margin-top: 6px; display: flex; justify-content: space-between; }
+    #speed { color: #22c55e; font-weight: bold; }
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>Director Remote</h1>
-    
-    <label style="font-size:0.8rem; color:#aaa;">1. Pick Movie File:</label>
-    <input type="file" id="file" accept="video/*">
+    <h1>Turbo Transmitter</h1>
 
-    <label style="font-size:0.8rem; color:#aaa;">2. Code from Screen Phone:</label>
-    <input type="text" id="target" placeholder="e.g. 5821" maxlength="4" inputmode="numeric">
+    <label style="font-size:0.8rem; color:#aaa;">1. Pick Video File:</label>
+    <input type="file" id="filePicker">
 
-    <button id="sendBtn" onclick="startStream()" disabled>Start Cinema</button>
-    <div id="status" style="font-size:0.8rem; color:#d4af37; margin-top:8px; text-align:center;"></div>
+    <label style="font-size:0.8rem; color:#aaa;">2. Receiver Code:</label>
+    <input type="text" id="targetCode" placeholder="e.g. 5821" maxlength="4" inputmode="numeric">
 
-    <div id="deck" style="display:none;">
-      <div class="grid">
-        <button onclick="seek(-10)">⏪ -10s</button>
-        <button onclick="seek(10)">⏩ +10s</button>
-        <button id="toggleBtn" onclick="togglePlay()">⏸ Pause</button>
-        <button onclick="sendCmd('fullscreen')" style="background:#2563eb; color:#fff;">⛶ Fullscreen</button>
-        <button onclick="sendCmd('curtains')" style="background:#7a0c16; color:#fff; grid-column: span 2;">🎭 Curtains</button>
-      </div>
+    <button id="sendBtn" onclick="startTransmission()" disabled>Turbo Send</button>
+
+    <div class="bar-bg"><div id="progress" class="bar-fill"></div></div>
+    <div class="stats">
+      <span id="transferred">0 MB</span>
+      <span id="speed">0 MB/s</span>
+      <span id="pct">0%</span>
     </div>
+    <div id="status" style="font-size:0.85rem; color:#d4af37; margin-top:10px; text-align:center;"></div>
   </div>
-
-  <video id="engine" playsinline muted style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px;"></video>
 
   <script>
     const peer = new Peer();
-    const engine = document.getElementById('engine');
-    const sendBtn = document.getElementById('sendBtn');
-    const status = document.getElementById('status');
-    let dataConn = null;
-    let wakeLock = null;
+    let selectedFile = null;
+    let conn = null;
 
-    async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
-      } catch (e) {}
-    }
+    const CHUNK_SIZE = 64 * 1024; // 64 KB protocol packet
+    const HIGH_WATERMARK = 16 * 1024 * 1024; // 16 MB active transmission window
+    const LOW_WATERMARK = 4 * 1024 * 1024;   // Refill point
 
-    document.addEventListener('visibilitychange', () => {
-      if (engine.src && !engine.ended) engine.play().catch(() => {});
-    });
+    let offset = 0;
+    let startTime = 0;
+    let lastBytes = 0;
+    let lastTime = 0;
 
-    document.getElementById('file').onchange = (e) => {
-      const file = e.target.files[0];
-      if (file) {
-        engine.src = URL.createObjectURL(file);
-        sendBtn.disabled = false;
+    document.getElementById('filePicker').onchange = (e) => {
+      selectedFile = e.target.files[0];
+      if (selectedFile) {
+        document.getElementById('sendBtn').disabled = false;
+        document.getElementById('status').textContent = `${(selectedFile.size / (1024*1024)).toFixed(1)} MB ready`;
       }
     };
 
-    function startStream() {
-      const code = document.getElementById('target').value.trim();
+    function startTransmission() {
+      const code = document.getElementById('targetCode').value.trim();
       if (code.length !== 4) return alert("Enter 4-digit code");
 
-      sendBtn.disabled = true;
-      status.textContent = "Connecting...";
+      document.getElementById('sendBtn').disabled = true;
+      document.getElementById('status').textContent = "Connecting...";
 
-      dataConn = peer.connect('cinehall-' + code);
+      conn = peer.connect('filerecv-' + code, { reliable: true });
 
-      engine.play().then(() => {
-        requestWakeLock();
-        const stream = engine.captureStream ? engine.captureStream(30) : engine.mozCaptureStream(30);
-        const call = peer.call('cinehall-' + code, stream);
+      conn.on('open', () => {
+        document.getElementById('status').textContent = "Turbo streaming to storage...";
+        const dc = conn.dataChannel;
+        dc.bufferedAmountLowThreshold = LOW_WATERMARK;
 
-        call.peerConnection.addEventListener('iceconnectionstatechange', () => {
-          if (call.peerConnection.iceConnectionState === 'connected') {
-            boostBitrate(call.peerConnection);
-          }
+        conn.send({
+          type: 'start',
+          name: selectedFile.name,
+          size: selectedFile.size,
+          mime: selectedFile.type
         });
 
-        status.textContent = "HD Cinema Broadcasting!";
-        document.getElementById('deck').style.display = 'block';
-      }).catch(err => {
-        alert("Playback error: " + err);
-        sendBtn.disabled = false;
+        startTime = performance.now();
+        lastTime = performance.now();
+        offset = 0;
+
+        // Drive transmission directly by the network hardware buffer
+        dc.onbufferedamountlow = () => pump();
+        pump();
       });
     }
 
-    async function boostBitrate(pc) {
-      const senders = pc.getSenders();
-      const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-      if (videoSender) {
-        try {
-          const params = videoSender.getParameters();
-          if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-          params.encodings[0].maxBitrate = 10000000;
-          params.encodings[0].networkPriority = 'high';
-          await videoSender.setParameters(params);
-        } catch (e) {}
+    async function pump() {
+      const dc = conn.dataChannel;
+
+      // Keep pipeline saturated up to 16 MB
+      while (offset < selectedFile.size && dc.bufferedAmount < HIGH_WATERMARK) {
+        const slice = selectedFile.slice(offset, offset + CHUNK_SIZE);
+        const buf = await slice.arrayBuffer();
+        conn.send(buf);
+        offset += CHUNK_SIZE;
+        updateUI();
+      }
+
+      if (offset >= selectedFile.size && dc.bufferedAmount === 0) {
+        conn.send({ type: 'eof' });
+        document.getElementById('status').textContent = "Transfer complete!";
+        document.getElementById('speed').textContent = "Done";
       }
     }
 
-    function togglePlay() {
-      if (engine.paused) {
-        engine.play();
-        document.getElementById('toggleBtn').textContent = "⏸ Pause";
-      } else {
-        engine.pause();
-        document.getElementById('toggleBtn').textContent = "▶ Resume";
+    function updateUI() {
+      const current = Math.min(offset, selectedFile.size);
+      const pct = Math.min(100, Math.round((current / selectedFile.size) * 100));
+      document.getElementById('progress').style.width = pct + '%';
+      document.getElementById('pct').textContent = pct + '%';
+      document.getElementById('transferred').textContent = `${(current / (1024*1024)).toFixed(1)} MB`;
+
+      // Live MB/s calculation
+      const now = performance.now();
+      if (now - lastTime > 400) {
+        const speedMBs = ((current - lastBytes) / (1024 * 1024)) / ((now - lastTime) / 1000);
+        document.getElementById('speed').textContent = `${speedMBs.toFixed(1)} MB/s`;
+        lastBytes = current;
+        lastTime = now;
       }
-    }
-
-    function seek(sec) {
-      engine.currentTime = Math.max(0, engine.currentTime + sec);
-    }
-
-    function sendCmd(action) {
-      if (dataConn && dataConn.open) dataConn.send({ type: 'control', action });
     }
   </script>
 </body>
