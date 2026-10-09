@@ -29,17 +29,33 @@
       pointer-events: none;
       transition: background 0.3s;
     }
+
+    /* Stage Container (can enter native fullscreen) */
     .stage {
       position: relative;
-      width: 92vw;
-      max-width: 960px;
+      width: 94vw;
+      max-width: 1000px;
       aspect-ratio: 16 / 9;
       background: #000;
       border-radius: 10px;
       overflow: hidden;
       box-shadow: 0 20px 50px rgba(0,0,0,0.9);
     }
-    video { width: 100%; height: 100%; object-fit: contain; }
+    /* When Fullscreen, stretch edge-to-edge like YouTube */
+    .stage:fullscreen, .stage:-webkit-full-screen {
+      width: 100vw !important;
+      height: 100vh !important;
+      max-width: none !important;
+      border-radius: 0 !important;
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      image-rendering: -webkit-optimize-contrast; /* Sharpen decoded frames */
+    }
+
     .curtain {
       position: absolute;
       top: 0; bottom: 0; width: 50.5%;
@@ -51,7 +67,8 @@
     .curtain.right { right: 0; transform-origin: right center; }
     .stage.open .curtain.left { transform: scaleX(0.05) translateX(-50%); }
     .stage.open .curtain.right { transform: scaleX(0.05) translateX(50%); }
-    
+
+    /* Code Pairing Box */
     #box {
       position: absolute;
       z-index: 10;
@@ -62,8 +79,25 @@
       text-align: center;
     }
     #code { font-size: 3.5rem; letter-spacing: 6px; color: #d4af37; font-weight: bold; margin: 10px 0; }
-    
-    /* Tap overlay to unlock audio safely on mobile browsers */
+
+    /* YouTube-style Fullscreen Button in corner */
+    #fs-btn {
+      display: none;
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      z-index: 25;
+      background: rgba(0,0,0,0.65);
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      backdrop-filter: blur(4px);
+    }
+
+    /* Tap for Audio prompt */
     #tap-to-unmute {
       display: none;
       position: absolute;
@@ -86,6 +120,8 @@
     <div class="curtain left"></div>
     <div class="curtain right"></div>
     <video id="screen" autoplay playsinline muted></video>
+    <!-- On-screen YouTube style fullscreen button -->
+    <button id="fs-btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
   </div>
 
   <button id="tap-to-unmute" onclick="enableAudio()">Tap for Theater Audio 🔊</button>
@@ -104,17 +140,17 @@
     const screen = document.getElementById('screen');
     const stage = document.getElementById('stage');
     const unmuteBtn = document.getElementById('tap-to-unmute');
+    const fsBtn = document.getElementById('fs-btn');
 
-    // 1. Receive data commands (Curtains)
     peer.on('connection', (conn) => {
       conn.on('data', (data) => {
-        if (data.type === 'control' && data.action === 'curtains') {
-          stage.classList.toggle('open');
+        if (data.type === 'control') {
+          if (data.action === 'curtains') stage.classList.toggle('open');
+          if (data.action === 'fullscreen') toggleFullscreen();
         }
       });
     });
 
-    // 2. Receive live incoming media stream
     peer.on('call', (call) => {
       call.answer();
 
@@ -125,6 +161,7 @@
         screen.play().then(() => {
           stage.classList.add('open');
           unmuteBtn.style.display = 'block';
+          fsBtn.style.display = 'block';
           setupGlow(screen);
         });
       });
@@ -134,6 +171,28 @@
       screen.muted = false;
       screen.volume = 1.0;
       unmuteBtn.style.display = 'none';
+    }
+
+    // Native Mobile Fullscreen (Locks into landscape mode)
+    function toggleFullscreen() {
+      const el = stage;
+      if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+        if (el.requestFullscreen) {
+          el.requestFullscreen();
+        } else if (el.webkitRequestFullscreen) {
+          el.webkitRequestFullscreen();
+        }
+        // Rotate screen to horizontal landscape if device supports it
+        if (screen.orientation && screen.orientation.lock) {
+          screen.orientation.lock('landscape').catch(() => {});
+        }
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        }
+      }
     }
 
     function setupGlow(videoEl) {
