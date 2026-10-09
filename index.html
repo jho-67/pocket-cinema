@@ -76,8 +76,7 @@
     </div>
   </div>
 
-  <!-- Hidden background video player feeding WebRTC -->
-  <video id="engine" playsinline muted style="display:none;"></video>
+  <video id="engine" playsinline muted style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px;"></video>
 
   <script>
     const peer = new Peer();
@@ -85,6 +84,17 @@
     const sendBtn = document.getElementById('sendBtn');
     const status = document.getElementById('status');
     let dataConn = null;
+    let wakeLock = null;
+
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen');
+      } catch (e) {}
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (engine.src && !engine.ended) engine.play().catch(() => {});
+    });
 
     document.getElementById('file').onchange = (e) => {
       const file = e.target.files[0];
@@ -104,11 +114,10 @@
       dataConn = peer.connect('cinehall-' + code);
 
       engine.play().then(() => {
-        // Request smooth 30 FPS stream capture
+        requestWakeLock();
         const stream = engine.captureStream ? engine.captureStream(30) : engine.mozCaptureStream(30);
         const call = peer.call('cinehall-' + code, stream);
 
-        // Boost bitrate to 10 Mbps (eliminates pixelation and blur)
         call.peerConnection.addEventListener('iceconnectionstatechange', () => {
           if (call.peerConnection.iceConnectionState === 'connected') {
             boostBitrate(call.peerConnection);
@@ -123,22 +132,17 @@
       });
     }
 
-    // Forces WebRTC to allocate HD bitrate instead of low video-call quality
     async function boostBitrate(pc) {
       const senders = pc.getSenders();
       const videoSender = senders.find(s => s.track && s.track.kind === 'video');
       if (videoSender) {
         try {
           const params = videoSender.getParameters();
-          if (!params.encodings || params.encodings.length === 0) {
-            params.encodings = [{}];
-          }
-          params.encodings[0].maxBitrate = 10000000; // 10 Mbps (Crystal Clear 1080p)
+          if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+          params.encodings[0].maxBitrate = 10000000;
           params.encodings[0].networkPriority = 'high';
           await videoSender.setParameters(params);
-        } catch (e) {
-          console.warn("Bitrate boost warning:", e);
-        }
+        } catch (e) {}
       }
     }
 
