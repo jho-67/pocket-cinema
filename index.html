@@ -57,68 +57,88 @@
     <h1>Director Remote</h1>
     
     <label style="font-size:0.8rem; color:#aaa;">1. Pick Movie File:</label>
-    <input type="file" id="file" accept="video/mp4,video/webm">
+    <input type="file" id="file" accept="video/*">
 
     <label style="font-size:0.8rem; color:#aaa;">2. Code from Screen Phone:</label>
     <input type="text" id="target" placeholder="e.g. 5821" maxlength="4" inputmode="numeric">
 
-    <button id="sendBtn" onclick="sendStream()" disabled>Start Cinema</button>
+    <button id="sendBtn" onclick="startStream()" disabled>Start Cinema</button>
     <div id="status" style="font-size:0.8rem; color:#d4af37; margin-top:8px; text-align:center;"></div>
 
     <div id="deck" style="display:none;">
       <div class="grid">
-        <button onclick="cmd('rewind')">⏪ -10s</button>
-        <button onclick="cmd('forward')">⏩ +10s</button>
-        <button onclick="cmd('toggle')">⏸ Pause/Play</button>
-        <button onclick="cmd('unmute')" style="background:#d4af37; color:#000;">🔊 Unmute</button>
+        <button onclick="seek(-10)">⏪ -10s</button>
+        <button onclick="seek(10)">⏩ +10s</button>
+        <button id="toggleBtn" onclick="togglePlay()">⏸ Pause</button>
+        <button onclick="sendCmd('curtains')" style="background:#7a0c16; color:#fff;">🎭 Curtains</button>
       </div>
     </div>
   </div>
 
+  <!-- Hidden background player: feeds WebRTC pipeline with zero host audio -->
+  <video id="engine" playsinline muted style="display:none;"></video>
+
   <script>
     const peer = new Peer();
-    let file = null, conn = null;
-    const CHUNK = 64 * 1024;
+    const engine = document.getElementById('engine');
+    const sendBtn = document.getElementById('sendBtn');
+    const status = document.getElementById('status');
+    let dataConn = null;
 
     document.getElementById('file').onchange = (e) => {
-      file = e.target.files[0];
-      if (file) document.getElementById('sendBtn').disabled = false;
+      const file = e.target.files[0];
+      if (file) {
+        engine.src = URL.createObjectURL(file);
+        sendBtn.disabled = false;
+      }
     };
 
-    function sendStream() {
+    function startStream() {
       const code = document.getElementById('target').value.trim();
       if (code.length !== 4) return alert("Enter 4-digit code");
 
-      document.getElementById('sendBtn').disabled = true;
-      document.getElementById('status').textContent = "Connecting...";
+      sendBtn.disabled = true;
+      status.textContent = "Connecting...";
 
-      conn = peer.connect('cinehall-' + code, { reliable: true });
-      conn.on('open', () => {
-        document.getElementById('status').textContent = "Streaming to screen...";
+      // Connect control channel
+      dataConn = peer.connect('cinehall-' + code);
+
+      engine.play().then(() => {
+        // Capture live decoded track straight from hardware pipeline
+        const stream = engine.captureStream ? engine.captureStream(30) : engine.mozCaptureStream(30);
+
+        // Call the screen phone with media stream
+        const call = peer.call('cinehall-' + code, stream);
+
+        call.on('open', () => {
+          status.textContent = "Streaming live to screen!";
+          document.getElementById('deck').style.display = 'block';
+        });
+
+        status.textContent = "Streaming live to screen!";
         document.getElementById('deck').style.display = 'block';
-        conn.send({ type: 'header', mime: file.type });
-        sliceAndSend(0);
+      }).catch(err => {
+        alert("Playback error: " + err);
+        sendBtn.disabled = false;
       });
     }
 
-    function sliceAndSend(offset) {
-      if (offset >= file.size) {
-        document.getElementById('status').textContent = "Loaded completely!";
-        return;
+    function togglePlay() {
+      if (engine.paused) {
+        engine.play();
+        document.getElementById('toggleBtn').textContent = "⏸ Pause";
+      } else {
+        engine.pause();
+        document.getElementById('toggleBtn').textContent = "▶ Resume";
       }
-      if (conn.dataChannel.bufferedAmount > 4 * 1024 * 1024) {
-        return setTimeout(() => sliceAndSend(offset), 40);
-      }
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        conn.send(e.target.result);
-        setTimeout(() => sliceAndSend(offset + CHUNK), 0);
-      };
-      reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK));
     }
 
-    function cmd(action) {
-      if (conn && conn.open) conn.send({ type: 'control', action });
+    function seek(sec) {
+      engine.currentTime = Math.max(0, engine.currentTime + sec);
+    }
+
+    function sendCmd(action) {
+      if (dataConn && dataConn.open) dataConn.send({ type: 'control', action });
     }
   </script>
 </body>
