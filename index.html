@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Director Remote</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #09090b;
+      color: #fff;
+      font-family: sans-serif;
+      padding: 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+    .card {
+      background: #18181b;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      padding: 20px;
+      width: 100%;
+      max-width: 400px;
+    }
+    h1 { color: #d4af37; font-size: 1.3rem; margin-bottom: 12px; text-align: center; }
+    input {
+      width: 100%;
+      padding: 12px;
+      background: #000;
+      border: 1px solid #3f3f46;
+      border-radius: 8px;
+      color: #fff;
+      font-size: 1rem;
+      margin-bottom: 12px;
+    }
+    button {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 8px;
+      background: #d4af37;
+      color: #000;
+      font-weight: bold;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.3; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 15px; }
+    .grid button { background: #27272a; color: #fff; font-size: 0.9rem; padding: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Director Remote</h1>
+    
+    <label style="font-size:0.8rem; color:#aaa;">1. Pick Movie File:</label>
+    <input type="file" id="file" accept="video/mp4,video/webm">
+
+    <label style="font-size:0.8rem; color:#aaa;">2. Code from Screen Phone:</label>
+    <input type="text" id="target" placeholder="e.g. 5821" maxlength="4" inputmode="numeric">
+
+    <button id="sendBtn" onclick="sendStream()" disabled>Start Cinema</button>
+    <div id="status" style="font-size:0.8rem; color:#d4af37; margin-top:8px; text-align:center;"></div>
+
+    <div id="deck" style="display:none;">
+      <div class="grid">
+        <button onclick="cmd('rewind')">⏪ -10s</button>
+        <button onclick="cmd('forward')">⏩ +10s</button>
+        <button onclick="cmd('toggle')">⏸ Pause/Play</button>
+        <button onclick="cmd('unmute')" style="background:#d4af37; color:#000;">🔊 Unmute</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const peer = new Peer();
+    let file = null, conn = null;
+    const CHUNK = 64 * 1024;
+
+    document.getElementById('file').onchange = (e) => {
+      file = e.target.files[0];
+      if (file) document.getElementById('sendBtn').disabled = false;
+    };
+
+    function sendStream() {
+      const code = document.getElementById('target').value.trim();
+      if (code.length !== 4) return alert("Enter 4-digit code");
+
+      document.getElementById('sendBtn').disabled = true;
+      document.getElementById('status').textContent = "Connecting...";
+
+      conn = peer.connect('cinehall-' + code, { reliable: true });
+      conn.on('open', () => {
+        document.getElementById('status').textContent = "Streaming to screen...";
+        document.getElementById('deck').style.display = 'block';
+        conn.send({ type: 'header', mime: file.type });
+        sliceAndSend(0);
+      });
+    }
+
+    function sliceAndSend(offset) {
+      if (offset >= file.size) {
+        document.getElementById('status').textContent = "Loaded completely!";
+        return;
+      }
+      if (conn.dataChannel.bufferedAmount > 4 * 1024 * 1024) {
+        return setTimeout(() => sliceAndSend(offset), 40);
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        conn.send(e.target.result);
+        setTimeout(() => sliceAndSend(offset + CHUNK), 0);
+      };
+      reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK));
+    }
+
+    function cmd(action) {
+      if (conn && conn.open) conn.send({ type: 'control', action });
+    }
+  </script>
+</body>
+</html>
